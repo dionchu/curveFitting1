@@ -1,0 +1,434 @@
+library(quantmod)
+getSymbols("^DJI")
+chartSeries(DJI)
+
+sd = rollingSD(DJI[,4]-DJI[,1],60)
+DJI = na.omit(merge(DJI,sd))
+################################################################################
+
+markCandles<-function(x,loc,str,pos=c("h","l")){
+pos = match.arg(pos)
+if(pos == "h"){pos = 2} else {pos = 3}
+n=length(loc)
+  for(i in 1:n){
+    text(loc[i], x[loc[i],pos], str, adj=0)
+  }
+}
+
+candleSize<-function(x,loc){
+
+return(abs(x[loc,4]-x[loc,1])/x$sd[loc])
+
+}
+
+findPeaks <- function(x,m=5){
+# x = OHLCV data
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+for(i in (1+m):(n-m)){
+  sub<-x[(i-m):(i+m)]
+  if(x[i,2]==max(sub[,2])) {loc <- c(loc,i)}
+}
+return(loc)
+}
+
+findValleys <- function(x,m=5){
+# x = OHLCV data
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+for(i in (1+m):(n-m)){
+  sub<-x[(i-m):(i+m)]
+  if(x[i,3]==min(sub[,3])) {loc <- c(loc,i)}
+}
+return(loc)
+}
+
+### find prior trend
+pTrend<-function(x,loc,type=c("valley","peaks")){
+require(dplyr)
+type = match.arg(type)
+tStart <- mat.or.vec(0,1)
+tLength <- mat.or.vec(0,1)
+tMove <- mat.or.vec(0,1)
+if(type == "peaks"){
+allP <- findPeaks(x,m=4)
+  for(i in 1:length(loc)){
+    p.loc <- allP[allP<loc[i]-3]
+    p.px <- x[p.loc,2]
+    tStart <- c(tStart,tryCatch(p.loc[max(which(p.px>lag(p.px)))], warning = function(w) {NA}))
+    tLength <- c(tLength,tryCatch(loc[i]-tStart[i], warning = function(w) {NA}))
+    tMove <- c(tMove,tryCatch(as.numeric(x[loc[i],4])-as.numeric(x[tStart[i],2]), warning = function(w) {NA}, error = function(e) {NA}))
+  }
+} else {
+allV <- findValleys(x,m=4)
+  for(i in 1:length(loc)){
+    v.loc <- allV[allV<loc[i]-3]
+    v.px <- x[v.loc,3]
+    tStart <- c(tStart,tryCatch(v.loc[max(which(v.px<lag(v.px)))], warning = function(w) {NA}))
+    tLength <- c(tLength,tryCatch(loc[i]-tStart[i], warning = function(w) {NA}))
+    tMove <- c(tMove,tryCatch(as.numeric(x[loc[i],4])-as.numeric(x[tStart[i],3]), warning = function(w) {NA}, error = function(e) {NA}))
+  }
+}
+return(cbind(tStart,tLength,tMove))
+}
+
+### find PNL
+calcPNL <- function(x,loc,n){
+tryCatch(DJI[loc+n,4] %>% as.numeric - DJI[loc,4] %>% as.numeric, error = function(e) {NA})
+}
+
+rollingSD<-function(x,width){
+
+s = sqrt(mean(head(x,width)^2,na.rm=TRUE))
+n = length(x)
+
+for(i in (width+1):n){
+x_sub = tail(head(x,i),width)
+s_sub = sqrt(mean(x_sub^2,na.rm=TRUE))
+s = c(s,s_sub)
+}
+return(xts(na.locf(s),order.by=index(tail(x,-width+1))))
+
+}
+
+################################################################################
+umbrella <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 1:n){
+    o = x[i,1]
+    h = x[i,2]
+    l = x[i,3]
+    c = x[i,4]
+    if (h-o == 0 & min(o,c)-l >= 2*abs(o-c)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+################################################################################
+engulfingBull <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) < as.numeric(o1) & as.numeric(c2) > as.numeric(o1) & as.numeric(o2) < as.numeric(c1)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+################################################################################
+engulfingBear <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) > as.numeric(o1) & as.numeric(c2) < as.numeric(o1) & as.numeric(o2) > as.numeric(c1)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+################################################################################
+darkCloudCover <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) > as.numeric(o1) & as.numeric(o2) > as.numeric(h1) & as.numeric(c2) <= as.numeric((c1+o1)/2)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+piercingPattern <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) < as.numeric(o1) & as.numeric(o2) < as.numeric(l1) & as.numeric(c2) > as.numeric((c1+o1)/2)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+################################################################################
+morningStar <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+for(i in 3:n){
+  o1 = x[i-2,1]
+  h1 = x[i-2,2]
+  l1 = x[i-2,3]
+  c1 = x[i-2,4]
+  o2 = x[i-1,1]
+  h2 = x[i-1,2]
+  l2 = x[i-1,3]
+  c2 = x[i-1,4]
+  o3 = x[i,1]
+  h3 = x[i,2]
+  l3 = x[i,3]
+  c3 = x[i,4]
+  if (
+  as.numeric(c1) < as.numeric(o1) & as.numeric(o2) < as.numeric(c1) & as.numeric(c2) < as.numeric(c1) & as.numeric(o2) < as.numeric(o1) & as.numeric(o2) < as.numeric(c3) & as.numeric(c2) < as.numeric(c3) & as.numeric(o2) < as.numeric(o3) & as.numeric(c2) < as.numeric(o3) & as.numeric(c2) < as.numeric(o1) & as.numeric(c3) >= as.numeric((c1+o1)/2)){
+  loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+eveningStar <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+for(i in 3:n){
+  o1 = x[i-2,1]
+  h1 = x[i-2,2]
+  l1 = x[i-2,3]
+  c1 = x[i-2,4]
+  o2 = x[i-1,1]
+  h2 = x[i-1,2]
+  l2 = x[i-1,3]
+  c2 = x[i-1,4]
+  o3 = x[i,1]
+  h3 = x[i,2]
+  l3 = x[i,3]
+  c3 = x[i,4]
+  if (
+  as.numeric(c1) > as.numeric(o1) & as.numeric(o2) > as.numeric(c1) & as.numeric(c2) > as.numeric(c1) & as.numeric(o2) > as.numeric(o1) & as.numeric(c2) > as.numeric(o1) & as.numeric(o2) > as.numeric(c3) & as.numeric(c2) > as.numeric(c3) & as.numeric(o2) > as.numeric(o3) & as.numeric(c2) > as.numeric(o3) & as.numeric(c3) <= as.numeric((c1+o1)/2)){
+  loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+shootingStar <- function(x){
+## inverted hammer comes after decline, shootingStar after rise
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 1:n){
+    o = x[i,1]
+    h = x[i,2]
+    l = x[i,3]
+    c = x[i,4]
+    if ((l-o == 0 | l-c == 0) & h-max(o,c) >= 2*abs(o-c)){
+    loc <- c(loc,i)
+    }
+  }
+return(loc)
+}
+
+################################################################################
+bullishHarami <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) < as.numeric(o1) & as.numeric(max(o2,c2)) < as.numeric(o1) & as.numeric(min(c2,o2)) > as.numeric(c1)){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+bearishHarami <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(c1) > as.numeric(o1) & as.numeric(max(o2,c2)) < as.numeric(c1) & as.numeric(min(c2,o2)) > as.numeric(o1)){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+################################################################################
+tweezerTop <- function(x){
+### ideal long first short second
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(h1) == as.numeric(h2)){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+tweezerBottom <- function(x){
+### ideal long first short second
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 2:n){
+    o1 = x[i-1,1]
+    h1 = x[i-1,2]
+    l1 = x[i-1,3]
+    c1 = x[i-1,4]
+    o2 = x[i,1]
+    h2 = x[i,2]
+    l2 = x[i,3]
+    c2 = x[i,4]
+    if (as.numeric(l1) == as.numeric(l2)){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+################################################################################
+bullishBeltHold <- function(x,percent){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 1:n){
+    o = x[i,1]
+    h = x[i,2]
+    l = x[i,3]
+    c = x[i,4]
+    if (c > o & o == l & c-l >= percent*(h-l)){
+    loc <- c(loc,i)
+    }
+  }
+}
+
+bearishBeltHold <- function(x,percent){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 1:n){
+    o = x[i,1]
+    h = x[i,2]
+    l = x[i,3]
+    c = x[i,4]
+    if (c < o & o == h & h-c >= percent*(h-l)){
+    loc <- c(loc,i)
+    }
+  }
+}
+
+################################################################################
+upsideGapTwoCrows <- function(x){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 3:n){
+    o1 = x[i-2,1]
+    h1 = x[i-2,2]
+    l1 = x[i-2,3]
+    c1 = x[i-2,4]
+    o2 = x[i-1,1]
+    h2 = x[i-1,2]
+    l2 = x[i-1,3]
+    c2 = x[i-1,4]
+    o3 = x[i,1]
+    h3 = x[i,2]
+    l3 = x[i,3]
+    c3 = x[i,4]
+    if (
+    as.numeric(c1) > as.numeric(o1) & as.numeric(o2) > as.numeric(c2) & as.numeric(o2) > as.numeric(c1) & as.numeric(c2) > as.numeric(c1) & as.numeric(o3) > as.numeric(o2) & as.numeric(c3) < as.numeric(c2)){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+threeBlackCrows <- function(x,percent){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 3:n){
+    o1 = x[i-2,1]
+    h1 = x[i-2,2]
+    l1 = x[i-2,3]
+    c1 = x[i-2,4]
+    o2 = x[i-1,1]
+    h2 = x[i-1,2]
+    l2 = x[i-1,3]
+    c2 = x[i-1,4]
+    o3 = x[i,1]
+    h3 = x[i,2]
+    l3 = x[i,3]
+    c3 = x[i,4]
+    if (
+    as.numeric(o1) > as.numeric(c1) & as.numeric(o2) > as.numeric(c2) & as.numeric(o3) > as.numeric(c3) & as.numeric(o2) > as.numeric(c1) & as.numeric(o3) > as.numeric(c2) & as.numeric(c2) < as.numeric(c1) & as.numeric(c3) < as.numeric(c2) & as.numeric(h1) - as.numeric(c1) >= percent*(as.numeric(h1)-as.numeric(l1)) & as.numeric(h2) - as.numeric(c2) >= percent*(as.numeric(h2)-as.numeric(l2)) & as.numeric(h3) - as.numeric(c3) >= percent*(as.numeric(h3)-as.numeric(l3))){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
+
+threeWhiteSoldiers <- function(x,percent){
+n = dim(x)[1]
+loc <-mat.or.vec(0,1)
+  for(i in 3:n){
+    o1 = x[i-2,1]
+    h1 = x[i-2,2]
+    l1 = x[i-2,3]
+    c1 = x[i-2,4]
+    o2 = x[i-1,1]
+    h2 = x[i-1,2]
+    l2 = x[i-1,3]
+    c2 = x[i-1,4]
+    o3 = x[i,1]
+    h3 = x[i,2]
+    l3 = x[i,3]
+    c3 = x[i,4]
+    if (
+    as.numeric(o1) < as.numeric(c1) & as.numeric(o2) < as.numeric(c2) & as.numeric(o3) < as.numeric(c3) & as.numeric(o2) < as.numeric(c1) & as.numeric(o3) < as.numeric(c2) & as.numeric(c2) > as.numeric(c1) & as.numeric(c3) > as.numeric(c2) & as.numeric(c1) - as.numeric(l1) >= percent*(as.numeric(h1)-as.numeric(l1)) & as.numeric(c2) - as.numeric(l2) >= percent*(as.numeric(h2)-as.numeric(l2)) & as.numeric(c3) - as.numeric(l3) >= percent*(as.numeric(h3)-as.numeric(l3))){
+    loc <- c(loc,i)
+  }
+}
+return(loc)
+}
