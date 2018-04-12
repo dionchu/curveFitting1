@@ -4,6 +4,30 @@ chartSeries(DJI)
 
 sd = rollingSD(DJI[,4]-DJI[,1],60)
 DJI = na.omit(merge(DJI,sd))
+
+supplementRawData <- function(xts){
+macd = MACD(xts[,4],8,16,9)
+macd$diff = macd[,1]-macd[,2]
+sd = rollingSD(xts[,4]-xts[,1],60)
+range = rollingRangeLoc(xts,25)
+yrange = rollingRangeLoc(xts,252)
+xts = na.omit(merge(xts,sd))
+xts = na.omit(merge(xts,range))
+xts = merge(xts,yrange,macd)
+return(xts)
+}
+
+model<-function(xts){
+xts = supplementRawData(xts)
+xts = na.omit(xts)
+loc = darkCloudCover(xts)
+pnl = dSD.sls(xts,loc,1,1.5)
+stats = merge(candleSize(xts,loc),xts[loc,c("sd","range","yrange","macd","signal","diff")],pnl)
+stats$sizeL1 = as.numeric(candleSize(xts,loc-1))
+stats.f = stats[stats$sizeL1 <7 & stats$macd < 0.32,]
+IC(stats.f$sdpnl)
+return(stats)
+}
 ################################################################################
 
 markCandles<-function(x,loc,str,pos=c("h","l")){
@@ -90,6 +114,60 @@ s = c(s,s_sub)
 return(xts(na.locf(s),order.by=index(tail(x,-width+1))))
 
 }
+
+dSD.sls<-function(xts,loc,sX,tX){
+if(dim(xts)[2]==1){ xts<-merge(xts,xts,xts,xts) }
+n=length(loc)
+sdpnl<-mat.or.vec(n,1)
+pnl<-mat.or.vec(n,1)
+hp<-mat.or.vec(n,1)
+  for(i in 1:n){
+    sub <- xts[paste(index(xts[loc[i],]),"/",sep=""),]
+    tgt <- sub[1,4] %>% as.numeric - tX*sub[1,]$sd %>% as.numeric
+    stop <- sub[1,4] %>% as.numeric + sX*sub[1,]$sd %>% as.numeric
+    tgt.loc <- min(tail(which(sub[,3]<=tgt),-1))
+    stop.loc <- min(tail(which(sub[,2]>=stop),-1))
+    sdpnl[i]<-ifelse(tgt.loc < stop.loc, tX, -sX)
+    pnl[i]<-ifelse(tgt.loc < stop.loc, sub[1,4] %>% as.numeric - tgt, sub[1,4] %>% as.numeric - stop)
+    hp[i]<-min(tgt.loc,stop.loc)
+  }
+  return(xts(cbind(sdpnl,pnl,hp),order.by=as.Date(index(xts[loc,]))))
+}
+
+IC <- function(x){
+IC = apply(x,2,function(x) mean(x,na.rm=TRUE)/sd(x,na.rm=TRUE))
+return(IC)
+}
+
+ICmat = mat.or.vec(31,31)
+colnames(ICmat)<-seq(1,4,by=.1)
+rownames(ICmat)<-seq(1,4,by=.1)
+for(i in 1:2){
+  for(j in 1:31){
+    pnl = dSD.sls(DJI,loc,1+i*0.1-0.1,1+j*0.1-0.1)
+    stats = merge(candleSize(DJI,loc),DJI[loc,c("sd","range","yrange")],pnl)
+    stats.f = stats[stats$range > 0.66,]
+    ICmat[i,j] = IC(stats.f$sdpnl)
+}}
+
+    loc = sample(seq(1,2777,by=1),30)
+    loc = darkCloudCover(DJI)
+    pnl = dSD.sls(DJI,loc,1,2)
+    stats = merge(candleSize(DJI,loc),DJI[loc,c("sd","range","yrange","macd","signal","diff")],pnl)
+    stats.f = stats[stats$DJI.Close <0.4 & stats$range < 0.75,]
+    IC(stats.f$sdpnl)
+
+stats = merge(candleSize(DJI,loc),DJI[loc,c("sd","range","yrange","macd","signal","diff")],pnl)
+ICvec = mat.or.vec(100,1)
+for(i in 1:100){
+loc = sample(seq(1,8117,by=1),276)
+pnl = uSD.sls(DJI,loc,1,2)
+ICvec[i] = IC(pnl$sdpnl)
+}
+
+    X = na.omit(stats[,c(1,3,4,5)])
+    X = merge(X[,1]*X[,4],X[,2]*X[,4],X[,3]*X[,4])
+     tryCatch({weights = tangencyPortfolio(X)}, error = function(e) {weights <- weights})
 
 ################################################################################
 umbrella <- function(x){
